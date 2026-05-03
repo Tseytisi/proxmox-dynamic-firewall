@@ -1,0 +1,12 @@
+[Unit]
+Description=Unofficial Proxmox dynamic firewall service
+
+[Service]
+Type=oneshot
+# More robust, but shows 'bash' in the systemd journal
+#ExecStart=/bin/bash /usr/local/bin/pvedynfw.sh
+# Shows 'pvedynfw.sh' in the journal, but requires execution permissions on the file
+ExecStart=/usr/local/bin/pvedynfw.sh
+
+[Install]
+WantedBy=multi-user.target
