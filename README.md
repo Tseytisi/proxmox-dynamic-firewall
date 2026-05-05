@@ -11,8 +11,6 @@ Small script that periodically queries a given domain name, and resolves its IP-
 
 _I am not affiliated with the Proxmox team. This is not official software and comes with no warranty. Proxmox updates may break this software._
 
-_IPv6 is not fully implemented yet_
-
 # How to use
 After [installation](#how-to-install), in either the web interface or the `.fw` files on a node (located at `/etc/pve/firewall/`):
 
@@ -35,7 +33,7 @@ Example (using private IP-ranges as example):
 IN ACCEPT -p tcp -dport 8080 -source 10.10.60.10 -log nolog # [DYN-IP A home.dave.example]
 ```
 
-There is no need to have the DNS record to point to an active service. An entry like `[DYN-IP A temp-location1.thecompany.com]` works completely fine even if the IP-address would be of no use in a web-browser or other application.
+There is no need to have the DNS record to point to an active or reachable service. An entry like `[DYN-IP A temp-location1.thecompany.com]` works completely fine even if the IP-address would be of no use in a web-browser or other application.
 
 # How to install
 The "service" consists of a single Bash script that needs no other resources to run. A systemd service and timer are included in the repository, but the only requirement is that the `pvedynfw.sh` script is executed periodically. Cron or any task scheduler would suffice too.
@@ -70,6 +68,3 @@ The script logs any errors to STDERR. When running through systemd, these logs a
 _This software comes with absolutely no warranty._ A dynamic firewall is more error-prone than a static one, and this system is vulnerable to DNS attacks and DNS cache poisoning. Though the latter concern can be reduced by using DNSSEC. The attacker would also need to know the exact domain the script queries. And then still, a firewall is (almost) never the only line of defense. Security concerns are small, but be aware of them.
 
 This script was tested on Proxmox Virtual Environment 9.1, for a single node. It was not tested on a multi-node PVE datacentre. It should work on Proxmox Backup Server too, but this was also not tested.
-
-IPv6 was also not thoroughly tested, though should work very similarly to IPv4.
-

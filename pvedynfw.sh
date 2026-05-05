@@ -30,7 +30,7 @@ VERBOSE=false
 ALLOW_MULTIPLE_RESPONSES=false
 
 # For testing only; writes updates to a temporary file and does not overwrite the actual firewall rules
-# Of course, firewall changes will not take effect, and every check will write a new updated file 
+# Of course, firewall changes will not take effect, and every check will write a new updated file
 NO_OVERWRITE=false
 # --- End: Settings ---
 
@@ -39,16 +39,16 @@ set -euo pipefail
 
 # A bunch of Regex (POSIX format :( )
 IPV4_matcher="[[:digit:]]{1,3}(\.[[:digit:]]{1,3}){3}"
-IPV6_matcher="([[:blank:]]+(([[:xdigit:]]{1,4}:)+|:)(:|(:[[:xdigit:]]{1,4})+)[[:blank:]]+|[[:xdigit:]]{1,4}(:[[:xdigit:]]{1,4}){7})"
+IPV6_matcher="((^|[[:blank:]]+)(([[:xdigit:]]{1,4}:)+|:)(:|(:[[:xdigit:]]{1,4})+)([[:blank:]]+|$)|[[:xdigit:]]{1,4}(:[[:xdigit:]]{1,4}){7})"
 
-# --- Functions --- 
+# --- Functions ---
 # Parameters:
 # 1: domain
 # 2: old IPv4
 check_ipv4 () {
     response="$(dig "$1" A +noall +answer | awk '{if ($4 == "A") print $5}')"
     if ! $ALLOW_MULTIPLE_RESPONSES && [ `printf "$response\n" | wc -l` -gt 1 ]; then
-        >&2 printf "Error: DNS lookup for '%s' returned more than one IPv4 address\n" "$1" 
+        >&2 printf "Error: DNS lookup for '%s' returned more than one IPv4 address\n" "$1"
         return
     fi
     if [[ $response =~ $IPV4_matcher ]]; then
@@ -66,9 +66,37 @@ check_ipv4 () {
         return
     fi
 }
-# --- End: Functions --- 
+
+# Parameters:
+# 1: domain
+# 2: old IPv6
+check_ipv6 () {
+    response="$(dig "$1" AAAA +noall +answer | awk '{if ($4 == "AAAA") print $5}')"
+    if ! $ALLOW_MULTIPLE_RESPONSES && [ `printf "$response\n" | wc -l` -gt 1 ]; then
+        >&2 printf "Error: DNS lookup for '%s' returned more than one IPv6 address\n" "$1"
+        return
+    fi
+    if [[ $response =~ $IPV6_matcher ]]; then
+        if $VERBOSE; then
+            >&2 printf "Received IPv6 response: %s\n" "${BASH_REMATCH}"
+        fi
+        # Strip whitespace
+        response="$(printf "$response" | xargs)"
+        if [[ $response != $2 ]]; then
+            echo "${BASH_REMATCH}"
+            return
+        elif $VERBOSE; then
+            >&2 echo Address did not change
+        fi
+    else
+        >&2 printf "Error: No (valid) response for DNS lookup of domain '%s'\n" "$1"
+        return
+    fi
+}
+# --- End: Functions ---
 
 TEMP_FILE="/tmp/pvedynfw.tmp"
+VERY_TEMP_FILE="/tmp/pvedynfw2.tmp"
 
 # --- Script start ---
 # For each file
@@ -85,6 +113,8 @@ for filepath in ${FIREWALL_FILES[@]}; do
     source_file="$filepath"
     # For every line in the file with [DYN-IP (A|AAAA) <domain>]
     while read -r line; do
+        # The grep used as input to this loop filters out any empty lines
+        # UNLESS there are no matches at all, in which case it will return one empty line
         if [[ $line == "" ]]; then
             if $VERBOSE; then
                 >&2 echo "Found no dynamic IP entries in file"
@@ -96,7 +126,7 @@ for filepath in ${FIREWALL_FILES[@]}; do
         fi
 
         # Do not update disabled firewall rules
-        if [[ $line == \|* ]]; then
+        if [[ $line == \|* || $line =~ ^[[:blank:]]*# ]]; then
             if $VERBOSE; then
                 >&2 echo Skipping disabled entry
             fi
@@ -108,7 +138,8 @@ for filepath in ${FIREWALL_FILES[@]}; do
             rule="$(printf "$line" | cut -d '#' -f 1)"
             record="${BASH_REMATCH[1]}"
             domain="${BASH_REMATCH[2]}"
-            declare address replacement
+            replacement=""
+            declare address
             case "$record" in
                 A)
                     if [[ $rule =~ $IPV4_matcher ]]; then
@@ -124,7 +155,7 @@ for filepath in ${FIREWALL_FILES[@]}; do
                         # a Bash function and this is the last check before we update
                         # the firewall
                         if [[ ! $replacement =~ $IPV4_matcher ]]; then
-                            >&2 printf "ERROR: Invalid return from IPv4 check '%s' (this is a bug, please report this)\n" "$replacement" 
+                            >&2 printf "ERROR: Invalid return from IPv4 check '%s' (this is a bug, please report this)\n" "$replacement"
                             continue
                         fi
                     else
@@ -132,13 +163,19 @@ for filepath in ${FIREWALL_FILES[@]}; do
                     fi
                     ;;
                 AAAA)
-                    >&2 printf "IPv6 is not fully implemented yet :(\n"
-                    continue
-                    # TODO check if the Regex supports lines in IPsets that start with an IPv6 addr
                     if [[ $rule =~ $IPV6_matcher ]]; then
                         # Strip whitespace
                         address="$(printf "${BASH_REMATCH}" | xargs)"
-                        echo "Found IPv6: $address"
+                        replacement="$(check_ipv6 "$domain" "$address")"
+                        if [ -z "$replacement" ]; then
+                            continue
+                        fi
+
+                        # Sanity-check
+                        if [[ ! $replacement =~ $IPV6_matcher ]]; then
+                            >&2 printf "ERROR: Invalid return from IPv6 check '%s' (this is a bug, please report this)\n" "$replacement"
+                            continue
+                        fi
                     else
                         >&2 printf "Error: Did not find a valid IPv6 address in rule on line: (file: %s) %s\n" "$filepath" "$line"
                     fi
@@ -153,7 +190,8 @@ for filepath in ${FIREWALL_FILES[@]}; do
                 >&2 printf "Found new IP for domain '%s' (%s -> %s)\n" "$domain" "$address" "$replacement"
 
                 # Write an updated file and update the line we're checking
-                awk '$0 == orig { sub("'"$address"'", "'"$replacement"'") } { print }' orig="$line" "$source_file" > "$TEMP_FILE"
+                awk '$0 == orig { sub("'"$address"'", "'"$replacement"'") } { print }' orig="$line" "$source_file" > "$VERY_TEMP_FILE"
+                mv "$VERY_TEMP_FILE" "$TEMP_FILE"
 
                 # First change, we read from the original file;
                 # any subsequent change, we read from the temporary file
